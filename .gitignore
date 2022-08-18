@@ -1,0 +1,11 @@
+libs/*
+dataset/lafan/BVH/*
+dataset/lafan/c3d/*
+dataset/lafan/images/*
+dataset/lafan/train_set/*
+dataset/lafan/test_set/*
+results/*
+.cproject
+.project
+**/.DS_Store
+*.pyc
