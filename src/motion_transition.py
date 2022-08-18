@@ -573,8 +573,8 @@ class dmtWrapper(QWidget):
 		self.num_inbetween = 10
 		self.fps = 30
 
-		self.dmp_q = dmpQ()
-		self.dmp_p = dmpP()
+		# self.dmp_q = dmpQ()
+		# self.dmp_p = dmpP()
 
 
 	def init_opt(self):
@@ -762,6 +762,9 @@ class GLWidget(gl.GLViewWidget):
 			lpos = ev.position() if hasattr(ev, 'position') else ev.localPos()
 			self.mousePos = lpos
 		else:
+			lpos = ev.position() if hasattr(ev, 'position') else ev.localPos()
+			self.mousePos = lpos
+
 			verts = self.items[-1].opts['meshdata'].vertexes()
 			self.targetOldPos = np.mean(verts, axis=0)
 
@@ -778,11 +781,112 @@ class GLWidget(gl.GLViewWidget):
 					self.orbit(-diff.x(), diff.y())
 			elif ev.buttons() == QtCore.Qt.MouseButton.MiddleButton:
 				if (ev.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier):
-					self.pan(diff.x(), 0, diff.y(), relative='view-upright')
+					self.pan(diff.x(), 0, diff.y(), relative='view')
 				else:
-					self.pan(diff.x(), diff.y(), 0, relative='view-upright')
+					self.pan(diff.x(), diff.y(), 0, relative='view')
 		else:
-			pass
+			lpos = ev.position() if hasattr(ev, 'position') else ev.localPos()
+			diff = lpos - self.mousePos
+			self.mousePos = lpos
+
+			if ev.buttons() == QtCore.Qt.MouseButton.LeftButton:
+				x0, y0, w, h = self.getViewport()
+				dist = self.opts['distance']
+				fov = self.opts['fov']
+				nearClip = dist * 0.001
+				farClip = dist * 1000.
+				lpos = ev.position() if hasattr(ev, 'position') else ev.localPos()
+				self.mousePos = lpos
+
+				r = nearClip * math.tan(0.5 * math.radians(fov))
+				t = r * h / w
+
+				view_matrix = self.viewMatrix()
+				matrix_inv = view_matrix.inverted()[0]
+
+				val = np.zeros(3)
+				val[0] = (2.0 * ((self.mousePos.x() - 0) / (self.deviceWidth() - 0))) - 1.0
+				val[1] = 1.0 - (2.0 * ((self.mousePos.y() - 0) / (self.deviceHeight() - 0)))
+				val[0] *= r
+				val[1] *= t
+				val[2] = nearClip
+
+				pp = np.array([val[0], val[1], val[2]])
+				z = abs(self.cameraPosition().z()) - abs(self.targetOldPos[2])
+				x = pp[0] * z / pp[2]
+				y = pp[1] * z / pp[2]
+
+				pos = np.array([[x], [y], [z], [1.]])
+				matrix_inv = np.matrix(matrix_inv.copyDataTo())
+				matrix_inv = np.reshape(matrix_inv, (4, 4))
+				pos = np.matmul(matrix_inv, pos)
+				pos = np.array([pos.item((0, 0)), pos.item((1, 0)), pos.item((2, 0)), pos.item((3, 0))])
+				self.targetNewPos = pos[:3]
+				self.targetNewPos[2] = self.targetOldPos[2]
+
+				diff = self.targetNewPos - self.targetOldPos
+				verts = self.items[-1].opts['meshdata'].vertexes()
+				verts = verts + diff
+				meshdata = gl.MeshData(vertexes=verts, faces=faces)
+				self.items[-1].setMeshData(meshdata=meshdata)
+
+				verts = self.items[-1].opts['meshdata'].vertexes()
+				self.targetOldPos = np.mean(verts, axis=0)
+
+			elif ev.buttons() == QtCore.Qt.MouseButton.RightButton:
+				verts = self.items[-1].opts['meshdata'].vertexes()
+				origin = np.mean(verts, axis=0)
+				verts_off = verts - origin
+
+				view_matrix = np.matrix(self.viewMatrix().copyDataTo())
+				proj_matrix = np.matrix(self.projectionMatrix().copyDataTo())
+				view_matrix = np.reshape(view_matrix, (4, 4))
+				proj_matrix = np.reshape(proj_matrix, (4, 4))
+				p = np.array([[origin[0]], [origin[1]], [origin[2]], [1.]])
+				p = np.matmul(view_matrix, p)
+				p = np.array([[p.item((0, 0))], [p.item((1, 0))], [p.item((2, 0))], [p.item((3, 0))]])
+				p = np.matmul(proj_matrix, p)
+				p = np.array([p.item((0, 0)), p.item((1, 0)), p.item((2, 0)), p.item((3, 0))])
+				p = p/p[-1]
+				x0, y0, w, h = self.getViewport()
+				px = (p[0] + 1.) * 0.5 * w + x0
+				py = (1. - p[1]) * 0.5 * h + y0
+
+				o = QtCore.QPointF(px, py)
+				new = self.mousePos
+				old = new - diff
+				a = old - o
+				a = np.linalg.norm(np.array([a.x(), a.y()]))
+				b = new - o
+				b = np.linalg.norm(np.array([b.x(), b.y()]))
+				c = np.linalg.norm(np.array([diff.x(), diff.y()]))
+				azim = math.acos((a * a + b * b - c * c) / (2 * a * b))
+
+				# get direction of rotation, cw or ccw
+				r = old - o
+				r_vec = np.array([r.x(), r.y(), 0.])
+				diff_vec = np.array([diff.x(), diff.y(), 0.])
+				direction = np.cross(r_vec, diff_vec)
+				if direction[2] > 0:
+					azim = -azim
+
+				rot_mat = np.zeros((3,3))
+				rot_mat[0][0] = math.cos(azim)
+				rot_mat[0][1] = -math.sin(azim)
+				rot_mat[1][0] = math.sin(azim)
+				rot_mat[1][1] = math.cos(azim)
+				rot_mat[2][2] = 1.
+
+				verts = [np.transpose(np.matmul(rot_mat, np.transpose(v[np.newaxis,...])))[0] for v in verts_off]
+				verts = np.stack(verts, axis=0) + origin
+				meshdata = gl.MeshData(vertexes=verts, faces=faces)
+				self.items[-1].setMeshData(meshdata=meshdata)
+
+			elif ev.buttons() == QtCore.Qt.MouseButton.MiddleButton:
+				if (ev.modifiers() & QtCore.Qt.KeyboardModifier.ControlModifier):
+					self.pan(diff.x(), 0, diff.y(), relative='view')
+				else:
+					self.pan(diff.x(), diff.y(), 0, relative='view')
 
 
 
@@ -790,58 +894,8 @@ class GLWidget(gl.GLViewWidget):
 		if not self.selectTarget:
 			pass
 		else:
-			x0, y0, w, h = self.getViewport()
-			dist = self.opts['distance']
-			fov = self.opts['fov']
-			nearClip = dist * 0.001
-			farClip = dist * 1000.
-			lpos = ev.position() if hasattr(ev, 'position') else ev.localPos()
-			self.mousePos = lpos
+			pass
 
-			r = nearClip * math.tan(0.5 * math.radians(fov))
-			t = r * h / w
-
-			view_matrix = self.viewMatrix()
-			matrix_inv = view_matrix.inverted()[0]
-
-			val = np.zeros(3)
-			val[0] = (2.0 * ((self.mousePos.x() - 0) / (self.deviceWidth() - 0))) - 1.0
-			val[1] = 1.0 - (2.0 * ((self.mousePos.y() - 0) / (self.deviceHeight() - 0)))
-			val[0] *= r
-			val[1] *= t
-			val[2] = nearClip
-
-			pp = np.array([val[0], val[1], val[2]])
-			z = abs(self.cameraPosition().z()) - abs(self.targetOldPos[2])
-			x = pp[0] * z / pp[2]
-			y = pp[1] * z / pp[2]
-
-			pos = np.array([[x], [y], [z], [1.]])
-			matrix_inv = np.matrix(matrix_inv.copyDataTo())
-			matrix_inv = np.reshape(matrix_inv, (4,4))
-			pos = np.matmul(matrix_inv, pos)
-			pos = np.array([pos.item((0,0)), pos.item((1,0)), pos.item((2,0)), pos.item((3,0))])
-			self.targetNewPos = pos[:3]
-			self.targetNewPos[2] = self.targetOldPos[2]
-
-			diff = self.targetNewPos - self.targetOldPos
-			verts = self.items[-1].opts['meshdata'].vertexes()
-			verts = verts + diff
-			meshdata = gl.MeshData(vertexes=verts, faces=faces)
-			self.items[-1].setMeshData(meshdata=meshdata)
-
-
-
-		# Example item selection code:
-	# region = (ev.pos().x()-5, ev.pos().y()-5, 10, 10)
-	# print(self.itemsAt(region))
-
-	## debugging code: draw the picking region
-	# glViewport(*self.getViewport())
-	# glClear( GL_DEPTH_BUFFER_BIT | GL_COLOR_BUFFER_BIT )
-	# region = (region[0], self.height()-(region[1]+region[3]), region[2], region[3])
-	# self.paintGL(region=region)
-	# self.swapBuffers()
 
 class Viewer(QMainWindow):
 	def __init__(self):
@@ -1131,10 +1185,6 @@ class Viewer(QMainWindow):
 		params = self.GLViewer.cameraParams()
 		params['rotation'] = None
 		self.currentViewParams[-1] = params
-
-	def generate(self):
-		self.pastLatentItems, self.targetLatentItems = self.sw.run_fvae(self.pastOriginalItems, self.targetOriginalItems)
-		self.transitions = self.sw.run_rtn(self.pastLatentItems, self.targetLatentItems)
 
 
 def main():
